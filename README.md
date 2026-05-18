@@ -35,9 +35,5 @@ Da sich das Projekt aktuell in der Entwicklung befindet, kannst du es wie folgt 
 3. **Bearbeiten**: Öffne den Editor, passe Titel an, füge Markierungen hinzu oder verpixle sensible Daten.
 4. **Exportieren**: Wähle dein gewünschtes Format aus und teile die Anleitung.
 
-## 📄 Lizenz
-
-Dieses Projekt steht unter der [MIT Lizenz](LICENSE).
-
 ---
 Erstellt mit ❤️ von Sascha Arend.
