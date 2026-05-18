@@ -1,0 +1,309 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+* {
+    box-sizing: border-box;
+}
+
+:root {
+    --primary: #4f46e5;
+    --primary-light: #818cf8;
+    --bg-dark: #0f172a;
+    --bg-black: #020617;
+    --text-white: #f8fafc;
+    --text-muted: #94a3b8;
+    --radius: 12px;
+}
+
+body {
+    font-family: 'Inter', sans-serif;
+    margin: 0;
+    background-color: var(--bg-dark);
+    overflow: hidden;
+    height: 100vh;
+    color: var(--text-white);
+}
+
+.slideshow-container {
+    max-width: 100%;
+    height: 100vh;
+    position: relative;
+    margin: auto;
+    display: flex;
+    flex-direction: column;
+}
+
+.mySlides {
+    display: none;
+    position: relative;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+}
+
+.fade {
+    animation-name: fade;
+    animation-duration: 0.6s;
+}
+
+@keyframes fade {
+    from {
+        opacity: 0
+    }
+
+    to {
+        opacity: 1
+    }
+}
+
+.background {
+    background-color: var(--bg-dark);
+    height: 100%;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    padding: 60px;
+    text-align: center;
+}
+
+.title {
+    font-size: 56px;
+    font-weight: 800;
+    margin-bottom: 24px;
+    letter-spacing: -0.03em;
+    background: linear-gradient(135deg, white 0%, #cbd5e1 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    max-width: 1000px;
+}
+
+.subtitle {
+    font-size: 24px;
+    max-width: 700px;
+    margin: 8px 0;
+    color: var(--text-muted);
+    font-weight: 500;
+}
+
+.image-container {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: calc(100vh - 72px);
+    width: 100%;
+    background: var(--bg-black);
+}
+
+.image-wrapper {
+    position: relative;
+    display: inline-block;
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+}
+
+img.step-img {
+    max-height: calc(100vh - 120px);
+    width: auto;
+    display: block;
+    border-radius: 4px;
+    transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+img.step-img.zoom-in {
+    transform: scale(1.02);
+}
+
+.box.marker-box.pulse {
+    animation: pulse 2s infinite;
+    display: block !important;
+}
+
+.box.marker-box.dimmed {
+    opacity: 0.3;
+    animation: none;
+    pointer-events: none;
+}
+
+@keyframes pulse {
+    0% {
+        box-shadow: 0 0 0 0 rgba(79, 70, 229, 0.6);
+        transform: scale(1);
+    }
+
+    50% {
+        box-shadow: 0 0 0 15px rgba(79, 70, 229, 0);
+        transform: scale(1.02);
+    }
+
+    100% {
+        box-shadow: 0 0 0 0 rgba(79, 70, 229, 0);
+        transform: scale(1);
+    }
+}
+
+.bubble {
+    color: white;
+    font-size: 15px;
+    padding: 24px;
+    background-color: rgba(15, 23, 42, 0.95);
+    border-radius: 16px;
+    position: absolute;
+    width: 340px;
+    z-index: 1100;
+    pointer-events: none;
+    box-shadow: 0 20px 40px -10px rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1), top 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.bubble b {
+    font-size: 20px;
+    display: block;
+    margin-bottom: 12px;
+    color: var(--primary-light);
+    letter-spacing: -0.01em;
+}
+
+/* Arrows */
+.bubble:after {
+    content: " ";
+    position: absolute;
+    border: 12px solid transparent;
+}
+
+.bubble.arrow-left:after {
+    left: -24px;
+    top: 24px;
+    border-right-color: rgba(15, 23, 42, 0.95);
+}
+
+.bubble.arrow-right:after {
+    right: -24px;
+    top: 24px;
+    border-left-color: rgba(15, 23, 42, 0.95);
+}
+
+.nav-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 72px;
+    background-color: rgba(255, 255, 255, 0.05);
+    backdrop-filter: blur(12px);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 32px;
+    z-index: 2000;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.nav-left {
+    min-width: 180px;
+    display: flex;
+    align-items: center;
+}
+
+.nav-center {
+    flex-grow: 1;
+    display: flex;
+    justify-content: center;
+    padding: 0 60px;
+}
+
+.nav-right {
+    min-width: 180px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 32px;
+}
+
+.logo-img {
+    max-height: 48px;
+    width: auto;
+}
+
+.progress-container {
+    width: 100%;
+    display: flex;
+    gap: 8px;
+    height: 8px;
+}
+
+.progress-segment {
+    flex: 1;
+    background-color: rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.progress-segment.active {
+    background-color: var(--primary);
+    box-shadow: 0 0 15px var(--primary);
+}
+
+.nav-btn {
+    cursor: pointer;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    font-size: 20px;
+    color: var(--text-white);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+}
+
+.nav-btn:hover:not(:disabled) {
+    background: var(--primary);
+    border-color: var(--primary);
+    transform: scale(1.1);
+}
+
+.nav-btn:disabled {
+    opacity: 0.15;
+    cursor: default;
+}
+
+.start-btn {
+    cursor: pointer;
+    padding: 16px 40px;
+    background-color: var(--primary);
+    color: white;
+    border-radius: 30px;
+    font-size: 18px;
+    font-weight: 700;
+    margin-top: 40px;
+    transition: all 0.2s;
+    border: none;
+    box-shadow: 0 10px 20px rgba(79, 70, 229, 0.3);
+}
+
+.start-btn:hover {
+    background-color: var(--primary-light);
+    transform: translateY(-2px);
+    box-shadow: 0 15px 30px rgba(79, 70, 229, 0.4);
+}
+
+@keyframes slideUp {
+    from {
+        opacity: 0;
+        transform: translateY(40px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.text-content b {
+    color: var(--primary-light);
+}

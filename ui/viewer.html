@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="de">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>eZNotes Dokumentation</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+        :root {
+            --primary: #4f46e5;
+            --text-main: #0f172a;
+            --text-muted: #64748b;
+            --bg-color: #f8fafc;
+            --card-bg: #ffffff;
+            --border-color: #e2e8f0;
+            --radius: 12px;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 40px 20px;
+            color: var(--text-main);
+            background: var(--bg-color);
+            line-height: 1.6;
+        }
+
+        .no-print {
+            position: fixed;
+            top: 24px;
+            right: 24px;
+            z-index: 100;
+        }
+
+        button {
+            padding: 10px 20px;
+            background: var(--primary);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 14px;
+            box-shadow: 0 4px 12px rgba(79, 70, 229, 0.2);
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        button:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 16px rgba(79, 70, 229, 0.3);
+        }
+
+        .viewer-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 60px;
+            padding-bottom: 30px;
+            border-bottom: 2px solid var(--border-color);
+        }
+
+        .viewer-header h1 {
+            font-size: 32px;
+            font-weight: 800;
+            margin: 0 0 8px 0;
+            letter-spacing: -0.02em;
+        }
+
+        .meta {
+            color: var(--text-muted);
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .viewer-logo {
+            max-height: 48px;
+            width: auto;
+        }
+
+        .step {
+            margin-bottom: 60px;
+            background: var(--card-bg);
+            padding: 32px;
+            border-radius: var(--radius);
+            border: 1px solid var(--border-color);
+            box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1);
+            page-break-inside: avoid;
+        }
+
+        .step h2 {
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--text-main);
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .step-number {
+            background: var(--primary);
+            color: white;
+            width: 28px;
+            height: 28px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            font-size: 14px;
+        }
+
+        img {
+            max-width: 100%;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: block;
+        }
+
+        .desc {
+            background: #f1f5f9;
+            padding: 20px;
+            border-left: 4px solid var(--primary);
+            border-radius: 0 8px 8px 0;
+            font-size: 15px;
+            color: #334155;
+            white-space: pre-wrap;
+        }
+
+        /* Chapter Styling */
+        .chapter-step {
+            background: transparent;
+            box-shadow: none;
+            border: none;
+            padding: 40px 0;
+            text-align: center;
+        }
+
+        .chapter-step h2 {
+            font-size: 32px;
+            font-weight: 800;
+            justify-content: center;
+            color: var(--text-main);
+        }
+
+        .chapter-divider {
+            width: 48px;
+            height: 4px;
+            background: var(--primary);
+            margin: 16px auto;
+            border-radius: 2px;
+        }
+
+        /* Textblock Styling */
+        .textblock-step {
+            border-left: 6px solid #3b82f6;
+            background: #eff6ff;
+        }
+
+        .textblock-step h2 {
+            color: #1d4ed8;
+        }
+
+        .textblock-content {
+            font-size: 16px;
+            color: #1e40af;
+        }
+
+        @media print {
+            .no-print {
+                display: none;
+            }
+
+            body {
+                padding: 0;
+                background: white;
+            }
+
+            .step {
+                box-shadow: none;
+                border: 1px solid #eee;
+                margin-bottom: 40px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="no-print">
+        <button id="btnPrint">🖨️ PDF Speichern / Drucken</button>
+    </div>
+
+    <div id="content">
+        <!-- Content will be injected here -->
+    </div>
+
+    <script src="../js/viewer.js"></script>
+</body>
+
+</html>

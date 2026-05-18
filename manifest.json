@@ -1,0 +1,51 @@
+{
+  "manifest_version": 3,
+  "name": "eZNotes",
+  "version": "2.2",
+  "description": "Erstelle im Handumdrehen professionelle Schritt-für-Schritt-Anleitungen. Erfasse automatisch Screenshots bei jedem Klick und exportiere sie als strukturierte Dokumentation.",
+  "copyright": "Copyright © 2026 Sascha Arend",
+  "permissions": [
+    "tabs",
+    "scripting",
+    "storage",
+    "downloads",
+    "unlimitedStorage"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "js/background.js"
+  },
+  "action": {
+    "default_title": "eZNotes",
+    "default_popup": "ui/popup.html",
+    "default_icon": {
+      "16": "icons/16.png",
+      "24": "icons/24.png",
+      "32": "icons/32.png",
+      "48": "icons/48.png",
+      "128": "icons/128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/16.png",
+    "24": "icons/24.png",
+    "32": "icons/32.png",
+    "48": "icons/48.png",
+    "128": "icons/128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "js/drawing_utils.js",
+        "js/content_script.js"
+      ],
+      "all_frames": true,
+      "run_at": "document_start"
+    }
+  ]
+}
