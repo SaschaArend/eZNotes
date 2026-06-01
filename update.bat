@@ -25,7 +25,7 @@ powershell -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.Security
 if not exist "%TEMP_ZIP%" (
     echo.
     color 0C
-    echo FEHLER: Download fehlgeschlagen! Bitte Internetverbindung prüfen.
+    echo FEHLER: Download fehlgeschlagen! Bitte Internetverbindung pruefen.
     pause
     exit /b
 )
@@ -35,16 +35,59 @@ if exist "%EXTRACT_DIR%" rmdir /s /q "%EXTRACT_DIR%"
 mkdir "%EXTRACT_DIR%"
 powershell -Command "Expand-Archive -LiteralPath '%TEMP_ZIP%' -DestinationPath '%EXTRACT_DIR%' -Force"
 
-echo 3. Aktualisiere Programmordner...
-if not exist "%TARGET_DIR%" mkdir "%TARGET_DIR%"
-
-:: GitHub packt alles in einen Unterordner (eZNotes-main), diesen muessen wir finden
+:: GitHub packt alles in einen Unterordner, diesen muessen wir finden
 set "SOURCE_SUBDIR="
 for /d %%i in ("%EXTRACT_DIR%\*") do set "SOURCE_SUBDIR=%%i"
 
-if defined SOURCE_SUBDIR (
-    xcopy "%SOURCE_SUBDIR%\*" "%TARGET_DIR%\" /s /e /y /q >nul
+if not defined SOURCE_SUBDIR (
+    echo.
+    color 0C
+    echo FEHLER: Entpacken fehlgeschlagen oder Quellordner nicht gefunden!
+    del /q "%TEMP_ZIP%"
+    rmdir /s /q "%EXTRACT_DIR%"
+    pause
+    exit /b
 )
+
+:: VERSIONSVERGLEICH AUS MANIFEST (Intelligentes Updateverfahren)
+if "%FIRST_INSTALL%"=="0" (
+    set "LOCAL_VERSION=0.0"
+    if exist "%TARGET_DIR%\manifest.json" (
+        for /f "delims=" %%v in ('powershell -Command "(Get-Content '%TARGET_DIR%\manifest.json' | ConvertFrom-Json).version"') do set "LOCAL_VERSION=%%v"
+    )
+
+    set "NEW_VERSION=0.0"
+    if exist "%SOURCE_SUBDIR%\manifest.json" (
+        for /f "delims=" %%v in ('powershell -Command "(Get-Content '%SOURCE_SUBDIR%\manifest.json' | ConvertFrom-Json).version"') do set "NEW_VERSION=%%v"
+    )
+
+    echo.
+    echo ===============================================================
+    echo Lokale Version:  v!LOCAL_VERSION!
+    echo GitHub Version:  v!NEW_VERSION!
+    echo ===============================================================
+    echo.
+
+    if "!LOCAL_VERSION!"=="!NEW_VERSION!" (
+        color 0A
+        echo Deine Version (v!LOCAL_VERSION!) ist bereits aktuell!
+        set /p "CHOICE=Moechtest du sie trotzdem neu installieren? (J/N): "
+        if /i "!CHOICE!" neq "J" (
+            echo.
+            echo Update abgebrochen.
+            del /q "%TEMP_ZIP%"
+            rmdir /s /q "%EXTRACT_DIR%"
+            timeout /t 3 >nul
+            exit /b
+        )
+    ) else (
+        echo Ein neues Update ist verfuegbar (v!LOCAL_VERSION! -^> v!NEW_VERSION!)!
+    )
+)
+
+echo 3. Aktualisiere Programmordner...
+if not exist "%TARGET_DIR%" mkdir "%TARGET_DIR%"
+xcopy "%SOURCE_SUBDIR%\*" "%TARGET_DIR%\" /s /e /y /q >nul
 
 echo 4. Bereinige temporaere Dateien...
 del /q "%TEMP_ZIP%"
@@ -81,10 +124,11 @@ if "%FIRST_INSTALL%"=="1" (
     echo Druecken Sie eine Taste, wenn Sie fertig sind...
     pause >nul
 ) else (
+    color 0A
     echo UPDATE ERFOLGREICH ABGESCHLOSSEN!
     echo ===============================================================
     echo.
-    echo Die Erweiterung wurde aktualisiert.
+    echo Die Erweiterung wurde auf Version v!NEW_VERSION! aktualisiert.
     echo.
     echo Das Fenster schliesst sich automatisch in 5 Sekunden...
     timeout /t 5 >nul

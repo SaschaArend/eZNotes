@@ -9,15 +9,6 @@
   // Console-Log-Snapshots via Script Injection (für Main World Zugriff)
   let capturedLogs = [];
 
-  function injectConsoleInterceptor() {
-    const script = document.createElement('script');
-    script.src = chrome.runtime.getURL('js/console_interceptor.js');
-    (document.head || document.documentElement).appendChild(script);
-    script.onload = () => script.remove();
-  }
-
-  injectConsoleInterceptor();
-
   let logUpdateResolver = null;
 
   function requestLogsUpdate() {
@@ -95,14 +86,25 @@
       title: document.title,
       timestamp: Date.now(),
       elementText: extractElementText(target),
-      isSensitive: isSensitiveData(target) || isSensitiveData(target.parentElement)
+      selector: getCssSelector(target)
     };
 
     window.__lastClickTemp = click;
-    flashClick(ev.clientX, ev.clientY);
+    // flashClick(ev.clientX, ev.clientY); // Auskommentiert, damit der Kreis nicht auf Screenshots erscheint
 
-    // Kurz warten, damit Logs von der Seite generiert werden können
+    // Kurz warten, damit Logs von der Seite generiert werden können oder Layout-Shifts (Menüs etc.) fertig sind
     setTimeout(async () => {
+      // [FIX] Re-capture targetRect nach dem Delay, um Shifting Elements (z.B. Accordions) abzufangen
+      const refreshedRect = target.getBoundingClientRect();
+      click.targetRect = {
+        x: refreshedRect.left,
+        y: refreshedRect.top,
+        width: refreshedRect.width,
+        height: refreshedRect.height
+      };
+      // Auch clientX/Y falls nötig anpassen? Nein, der Klickpunkt bleibt wo er war, 
+      // aber der Marker (Viereck) sollte das Ziel nun korrekt umschließen.
+
       await requestLogsUpdate();
       click.logs = capturedLogs; // Die jetzt aktualisierten Logs anhängen
 
@@ -114,7 +116,7 @@
       if (enabled || copyOnClickEnabled || sessionActive) {
         bubbleCoordinateRequest(click);
       }
-    }, 100);
+    }, 150);
   }, true);
 
   // --- ENTWICKLERMODUS LOGIK ---
@@ -225,8 +227,120 @@
       showHotkeyFeedback(`✅ Zu Session hinzugefügt (${msg.count})`, false);
     } else if (msg.type === 'sessionError') {
       showHotkeyFeedback(`❌ ${msg.message}`, true, 5000);
+    } else if (msg.type === 'PLAY_STEP') {
+      console.log('[eZNotes] PLAY_STEP erhalten');
+      handlePlayStep(msg.selector, msg.elementText, msg.value);
+    } else if (msg.type === 'START_LIVE_VIEW') {
+      console.log('[eZNotes] START_LIVE_VIEW erhalten');
+      startLiveView(msg.steps);
+    } else if (msg.type === 'LIVE_VIEW_SYNC') {
+      // Synchronisation von anderen Frames (meistens vom Top-Frame gesteuert)
+      liveViewSteps = msg.steps || [];
+      currentLiveViewIndex = msg.index || 0;
+      updateLiveViewUI(true); // true = silent update (kein UI-Re-Render)
+    } else if (msg.type === 'LIVE_VIEW_CLOSE') {
+      stopLiveView();
     }
   });
+
+  // Hilfsfunktion für Multi-Frame Relay
+  function relayToAllFrames(type, data) {
+    chrome.runtime.sendMessage({
+      type: 'RELAY_TO_TAB',
+      data: { type, ...data }
+    });
+  }
+
+  // --- AUTOMATISIERUNG (Point 10) ---
+  function handlePlayStep(selector, expectedText, value) {
+    let el = document.querySelector(selector);
+
+    // Fallback für ältere, ungescapte Selektoren (z.B. mit : in IDs)
+    if (!el && selector.includes(':') && !selector.includes('\\:')) {
+      try {
+        const escapedSelector = selector.replace(/:/g, '\\:');
+        el = document.querySelector(escapedSelector);
+      } catch (e) { }
+    }
+
+    if (!el) {
+      // In Multi-Frame Umgebungen ignorieren wir Fehler in Frames ohne das Element
+      console.log('[eZNotes] Element in diesem Frame nicht gefunden:', selector);
+      return;
+    }
+
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+    // Visuelles Feedback vor dem Klick
+    setTimeout(() => {
+      const rect = el.getBoundingClientRect();
+      flashClick(rect.left + rect.width / 2, rect.top + rect.height / 2);
+
+      // RPA-style Click Simulation (Detaillierter für Infor LN Menüs)
+      if (value && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) {
+        simulateRpaClick(el);
+        setTimeout(() => {
+          if (el.isContentEditable) {
+            el.innerText = value;
+          } else {
+            el.value = value;
+          }
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+          showHotkeyFeedback(`✍️ Text eingefügt: "${value}"`, false);
+        }, 100);
+      } else {
+        simulateRpaClick(el);
+        showHotkeyFeedback(`▶️ Klick auf "${expectedText || 'Element'}"`, false);
+      }
+    }, 600);
+  }
+
+  function getCssSelector(el) {
+    if (!(el instanceof Element)) return '';
+    const path = [];
+    let current = el;
+    while (current && current.nodeType === Node.ELEMENT_NODE) {
+      let selector = current.nodeName.toLowerCase();
+      if (current.id) {
+        // IDs mit Sonderzeichen (z.B. : in Infor LN) müssen escaped werden
+        selector += '#' + CSS.escape(current.id);
+        path.unshift(selector);
+        break;
+      } else {
+        let sib = current, nth = 1;
+        while (sib = sib.previousElementSibling) {
+          if (sib.nodeName.toLowerCase() == selector) nth++;
+        }
+        if (nth != 1) selector += ":nth-of-type(" + nth + ")";
+      }
+      path.unshift(selector);
+      current = current.parentNode;
+    }
+    return path.join(" > ");
+  }
+
+  function simulateRpaClick(el) {
+    el.focus();
+
+    // Pointer Events für moderne Frameworks (wie Infor CloudSuite)
+    const eventTypes = ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'];
+    eventTypes.forEach(type => {
+      const isPointer = type.startsWith('pointer');
+      const EventClass = isPointer ? window.PointerEvent : window.MouseEvent;
+
+      const ev = new EventClass(type, {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        buttons: 1,
+        pointerId: 1,
+        isPrimary: true
+      });
+      el.dispatchEvent(ev);
+    });
+  }
+
 
 
   // Kurzer Klick-Blitz am Bildschirm
@@ -362,7 +476,7 @@
 
         window.__lastClickTemp = click;
         chrome.runtime.sendMessage(click);
-        flashClick(click.clientX, click.clientY);
+        // flashClick(click.clientX, click.clientY); // Auskommentiert, damit der Kreis nicht auf Screenshots erscheint
       }
 
     } catch (error) {
@@ -759,45 +873,314 @@
   // Hilfsfunktion: Text eines Elements schlau extrahieren
   function extractElementText(el) {
     if (!el) return '';
+
+    // 0. Suche nach verknüpften Labels (Standard & ERP-spezifisch)
+    let labelText = '';
+
+    // a) Standard label[for]
+    if (el.id) {
+      const label = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+      if (label) labelText = label.innerText || label.textContent;
+    }
+
+    // b) ERP-spezifischer Suffix (z.B. tccom4100s000-tccom100.inet-n15-label)
+    if (!labelText && el.id && el.id.includes('-')) {
+      const labelEl = document.getElementById(el.id + '-label');
+      if (labelEl) labelText = labelEl.innerText || labelEl.textContent;
+    }
+
+    // c) Umschließendes Label
+    if (!labelText && el.labels && el.labels.length > 0) {
+      labelText = el.labels[0].innerText || el.labels[0].textContent;
+    }
+
+    if (labelText) {
+      labelText = labelText.trim().replace(/:$/, ''); // Doppelpunkt am Ende entfernen
+      if (labelText) return labelText;
+    }
+
     // 1. Spezielle Inputs
     if (el.tagName === 'INPUT') {
       if (el.type === 'submit' || el.type === 'button') return el.value;
-      return el.placeholder || el.name || el.id || '';
+      if (el.placeholder) return el.placeholder;
+      if (el.name && !el.name.includes('#')) return el.name;
     }
+
     // 2. Aria-Label
     const aria = el.getAttribute('aria-label');
     if (aria) return aria;
+
     // 3. Button/Link Text
     let text = el.innerText || el.textContent || '';
     text = text.trim().split('\n')[0]; // Nur erste Zeile
+
+    // Fallback: Wenn der Text wie ein technischer Selektor aussieht, lieber "Element"
+    if (text.includes('#') || text.includes('.') || (text.includes('-') && text.length > 20)) {
+      return 'Element';
+    }
+
     if (text.length > 50) text = text.substring(0, 47) + '...';
     return text;
   }
 
-  // PRÜFUNG AUF SENSIBLE DATEN
-  function isSensitiveData(el) {
-    if (!el) return false;
-    // Prüfe Input-Typen
-    if (el.tagName === 'INPUT' && (el.type === 'password' || el.type === 'tel')) return true;
+  // --- LIVE VIEW OVERLAY ---
+  let liveViewSteps = [];
+  let currentLiveViewIndex = 0;
+  let liveViewOverlayEl = null;
+  let liveViewHighlightEl = null;
 
-    // Prüfe Textinhalte (E-Mail, IBAN, etc.)
-    const text = el.innerText || el.value || '';
-    const patterns = {
-      email: /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/,
-      iban: /[A-Z]{2}\d{2}[A-Z0-9]{11,31}/,
-      creditCard: /\b(?:\d[ -]*?){13,16}\b/
-    };
+  let activeScrollListener = null;
 
-    for (const key in patterns) {
-      if (patterns[key].test(text)) return true;
+  function startLiveView(steps) {
+    if (!steps || steps.length === 0) return;
+    liveViewSteps = steps;
+    currentLiveViewIndex = 0;
+
+    // UI nur im Top-Frame rendern
+    if (window === window.top) {
+      renderLiveViewUI();
     }
 
-    // Prüfe Klassen/IDs auf verdächtige Begriffe
-    const sensitiveTerms = ['password', 'secret', 'token', 'auth', 'cvv', 'cardnumber', 'private'];
-    const attrString = (el.id + el.className + (el.name || '')).toLowerCase();
-    if (sensitiveTerms.some(term => attrString.includes(term))) return true;
+    updateLiveViewUI();
+  }
 
-    return false;
+  function renderLiveViewUI() {
+    if (liveViewOverlayEl) liveViewOverlayEl.remove();
+
+    liveViewOverlayEl = document.createElement('div');
+    liveViewOverlayEl.className = 'ez-rpa-live-view';
+    Object.assign(liveViewOverlayEl.style, {
+      position: 'fixed',
+      bottom: '30px',
+      right: '30px',
+      width: '320px',
+      background: 'white',
+      borderRadius: '12px',
+      boxShadow: '0 10px 40px rgba(15,23,42,0.15)',
+      zIndex: '2147483647',
+      fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+      overflow: 'hidden',
+      display: 'flex',
+      flexDirection: 'column',
+      border: '1px solid rgba(15,23,42,0.08)'
+    });
+
+    const header = document.createElement('div');
+    Object.assign(header.style, {
+      background: '#f8fafc',
+      color: '#0f172a',
+      padding: '14px 18px',
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      fontWeight: '700',
+      fontSize: '12px',
+      borderBottom: '1px solid #e2e8f0',
+      letterSpacing: '0.05em',
+      textTransform: 'uppercase'
+    });
+    header.innerHTML = `
+      <span>Live-Vorschau</span>
+      <span id="ez-rpa-counter" style="background: #e2e8f0; color: #475569; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 600;"></span>
+    `;
+
+    const body = document.createElement('div');
+    Object.assign(body.style, {
+      padding: '18px',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '8px'
+    });
+    body.innerHTML = `
+      <div id="ez-rpa-title" style="font-weight: 700; font-size: 15px; color: #0f172a; line-height: 1.4;"></div>
+      <div id="ez-rpa-desc" style="font-size: 13px; color: #64748b; min-height: 40px; margin-top: 4px; line-height: 1.5; white-space: pre-wrap;"></div>
+    `;
+
+    const footer = document.createElement('div');
+    Object.assign(footer.style, {
+      padding: '14px 18px',
+      background: '#f8fafc',
+      borderTop: '1px solid #e2e8f0',
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center'
+    });
+
+    const btnStyle = "padding: 8px 14px; border-radius: 8px; border: 1px solid #d1d5db; font-size: 12px; cursor: pointer; font-weight: 600; transition: all 0.2s; font-family: inherit;";
+
+    footer.innerHTML = `
+      <div style="display: flex; gap: 8px;">
+        <button id="ez-rpa-prev" style="${btnStyle} background: white; color: #334155;">Zurück</button>
+        <button id="ez-rpa-next" style="${btnStyle} background: #4f46e5; border-color: #4f46e5; color: white;">Weiter</button>
+      </div>
+      <div style="display: flex; gap: 8px; align-items: center;">
+        <button id="ez-rpa-play" style="${btnStyle} background: #10b981; border-color: #10b981; color: white; display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; padding: 0;" title="Aktion ausführen">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+            <polygon points="5 3 19 12 5 21 5 3"></polygon>
+          </svg>
+        </button>
+        <button id="ez-rpa-close" style="${btnStyle} background: transparent; border: none; color: #94a3b8; width: 32px; height: 32px; padding: 0; display: flex; align-items: center; justify-content: center; font-size: 18px;" title="Schließen">✕</button>
+      </div>
+    `;
+
+    liveViewOverlayEl.appendChild(header);
+    liveViewOverlayEl.appendChild(body);
+    liveViewOverlayEl.appendChild(footer);
+
+    document.body.appendChild(liveViewOverlayEl);
+
+    document.getElementById('ez-rpa-prev').onclick = () => {
+      if (currentLiveViewIndex > 0) {
+        currentLiveViewIndex--;
+        syncLiveViewAcrossFrames();
+      }
+    };
+
+    document.getElementById('ez-rpa-next').onclick = () => {
+      if (currentLiveViewIndex < liveViewSteps.length - 1) {
+        currentLiveViewIndex++;
+        syncLiveViewAcrossFrames();
+      }
+    };
+
+    document.getElementById('ez-rpa-play').onclick = () => {
+      const step = liveViewSteps[currentLiveViewIndex];
+      // Broadcast Play-Step an alle Frames
+      relayToAllFrames('PLAY_STEP', {
+        selector: step.selector,
+        elementText: step.title,
+        value: step.value
+      });
+    };
+
+    document.getElementById('ez-rpa-close').onclick = () => {
+      relayToAllFrames('LIVE_VIEW_CLOSE', {});
+      stopLiveView();
+    };
+  }
+
+  function syncLiveViewAcrossFrames() {
+    updateLiveViewUI();
+    relayToAllFrames('LIVE_VIEW_SYNC', {
+      index: currentLiveViewIndex,
+      steps: liveViewSteps
+    });
+  }
+
+  function updateLiveViewUI(silent = false) {
+    if (window === window.top && liveViewOverlayEl) {
+      const step = liveViewSteps[currentLiveViewIndex];
+      document.getElementById('ez-rpa-counter').textContent = `${currentLiveViewIndex + 1} / ${liveViewSteps.length}`;
+      document.getElementById('ez-rpa-title').textContent = step.title || 'Schritt';
+
+      // Zeige ausschließlich den Beschreibungstext
+      document.getElementById('ez-rpa-desc').textContent = step.description || 'Keine Beschreibung vorhanden.';
+
+      // Button-Status aktualisieren
+      document.getElementById('ez-rpa-prev').style.opacity = currentLiveViewIndex === 0 ? '0.4' : '1';
+      document.getElementById('ez-rpa-prev').disabled = currentLiveViewIndex === 0;
+      document.getElementById('ez-rpa-next').style.opacity = currentLiveViewIndex === liveViewSteps.length - 1 ? '0.4' : '1';
+      document.getElementById('ez-rpa-next').disabled = currentLiveViewIndex === liveViewSteps.length - 1;
+    }
+
+    const step = liveViewSteps[currentLiveViewIndex];
+    if (step) {
+      highlightTargetElement(step.selector);
+    }
+  }
+
+  function highlightTargetElement(selector, retryCount = 0) {
+    // Alten Marker und Scroll-Listener entfernen
+    if (liveViewHighlightEl) {
+      liveViewHighlightEl.remove();
+      liveViewHighlightEl = null;
+    }
+    if (activeScrollListener) {
+      window.removeEventListener('scroll', activeScrollListener, { capture: true });
+      activeScrollListener = null;
+    }
+
+    if (!selector) return;
+
+    let el = document.querySelector(selector);
+    if (!el && selector.includes(':') && !selector.includes('\\:')) {
+      try { el = document.querySelector(selector.replace(/:/g, '\\:')); } catch (e) { }
+    }
+
+    if (!el) {
+      if (retryCount < 10) { // Versuche es bis zu 2 Sekunden lang
+        setTimeout(() => highlightTargetElement(selector, retryCount + 1), 200);
+      }
+      return;
+    }
+
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+    const rect = el.getBoundingClientRect();
+    liveViewHighlightEl = document.createElement('div');
+    Object.assign(liveViewHighlightEl.style, {
+      position: 'fixed',
+      boxSizing: 'border-box',
+      top: rect.top + 'px',
+      left: rect.left + 'px',
+      width: rect.width + 'px',
+      height: rect.height + 'px',
+      border: '3px solid #4f46e5',
+      borderRadius: '6px',
+      backgroundColor: 'rgba(79, 70, 229, 0.08)',
+      pointerEvents: 'auto',
+      cursor: 'pointer',
+      zIndex: '2147483646',
+      transition: 'all 0.15s ease',
+      boxShadow: '0 0 0 9999px rgba(0,0,0,0.15)' // Zarte Verdunkelung des Rests für Fokus!
+    });
+
+    // Position bei Scrollen (auch in Containern) aktualisieren
+    activeScrollListener = () => {
+      const currentEl = document.querySelector(selector);
+      if (currentEl && liveViewHighlightEl) {
+        const currentRect = currentEl.getBoundingClientRect();
+        Object.assign(liveViewHighlightEl.style, {
+          top: currentRect.top + 'px',
+          left: currentRect.left + 'px',
+          width: currentRect.width + 'px',
+          height: currentRect.height + 'px'
+        });
+      }
+    };
+    window.addEventListener('scroll', activeScrollListener, { capture: true, passive: true });
+
+    liveViewHighlightEl.onclick = (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+
+      const currentStepObj = liveViewSteps[currentLiveViewIndex];
+      handlePlayStep(currentStepObj.selector, currentStepObj.title, currentStepObj.value);
+
+      setTimeout(() => {
+        if (currentLiveViewIndex < liveViewSteps.length - 1) {
+          currentLiveViewIndex++;
+          syncLiveViewAcrossFrames();
+        } else {
+          relayToAllFrames('LIVE_VIEW_CLOSE', {});
+          stopLiveView();
+        }
+      }, 500);
+    };
+
+    document.body.appendChild(liveViewHighlightEl);
+  }
+
+  function stopLiveView() {
+    if (liveViewOverlayEl) liveViewOverlayEl.remove();
+    if (liveViewHighlightEl) liveViewHighlightEl.remove();
+    if (activeScrollListener) {
+      window.removeEventListener('scroll', activeScrollListener, { capture: true });
+    }
+    liveViewOverlayEl = null;
+    liveViewHighlightEl = null;
+    activeScrollListener = null;
+    liveViewSteps = [];
   }
 
 })();

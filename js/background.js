@@ -11,6 +11,14 @@ async function handleMessage(message, sender, sendResponse) {
   try {
     if (!message) return;
 
+    // [NEW] Relay-Logic für Multi-Frame Kommunikation (z.B. Live View Sync)
+    if (message.type === 'RELAY_TO_TAB') {
+      if (sender?.tab?.id) {
+        chrome.tabs.sendMessage(sender.tab.id, message.data).catch(e => console.warn('[BG] Relay failed:', e));
+      }
+      return;
+    }
+
     // Autosave-Nachricht vom Content-Script
     if (message.type === 'autosave') {
       console.log('[BG] Autosave-Anfrage erhalten:', {
@@ -60,7 +68,7 @@ async function handleMessage(message, sender, sendResponse) {
 
     const cfg = await chrome.storage.sync.get([
       "recording", "autosave", "copyOnClick", "preset", "markerNumber", "markerText", "lineColor", "lineWidth",
-      "arrowAngle", "arrowLength", "doubleArrow"
+      "arrowAngle", "arrowLength", "doubleArrow", "smartCrop"
     ]);
 
     const windowId = sender?.tab?.windowId;
@@ -123,11 +131,29 @@ async function handleMessage(message, sender, sendResponse) {
         return;
       }
 
+      // [NEW] Smart-Cropping (Point 6)
+      let finalImageDataUrl = imageDataUrl;
+      if (cfg.smartCrop && message.clientX !== undefined && message.clientY !== undefined) {
+        try {
+          finalImageDataUrl = await cropImage(imageDataUrl, message.clientX, message.clientY, message.devicePixelRatio || 1);
+        } catch (cropErr) {
+          console.error('[BG] Smart-Crop failed:', cropErr);
+        }
+      }
+
+      // [NEW] Clean Title Logic (Exclude technical selectors and "Drill-Down")
+      let cleanTitle = message.elementText || message.title || 'Schritt';
+      if (cleanTitle.toLowerCase().includes('drill-down')) {
+        cleanTitle = 'Details'; // Sachtext statt technischer Bezeichnung
+      } else if (cleanTitle.includes('#') || cleanTitle.includes('>') || (cleanTitle.includes('-') && cleanTitle.length > 15)) {
+        cleanTitle = 'Element'; // Vermeide technische CSS Selektoren im Titel
+      }
+
       // Create Step Object
       const step = {
         id: Date.now(),
-        dataUrl: imageDataUrl,
-        title: message.elementText ? `Klick auf "${message.elementText}"` : (message.title || 'Schritt'),
+        dataUrl: finalImageDataUrl,
+        title: `Klick auf "${cleanTitle}"`,
         description: '',
         session: '',
         field: '',
@@ -137,20 +163,25 @@ async function handleMessage(message, sender, sendResponse) {
         rect: message.targetRect,
         meta: meta,
         isSensitive: message.isSensitive || false,
-        logs: message.logs || []
+        markers: [],
+        logs: message.logs || [],
+        selector: message.selector || ''
       };
 
-      // ERP System specific parsing
+      // ERP System specific parsing (Strict regex to avoid words like "Drill-Down")
       const sessionRegex = /([a-z]{2,6}\d{4,}[a-z]\d{2,})/i;
       const fieldRegex = /([a-z]{2,6}\d{3,}\.[a-z0-9_.-]{1,})/i;
-      const combinedRegex = /([a-z0-9]{5,15})-([a-z0-9_.-]{3,})/i;
+      const combinedRegex = /([a-z]{2,8}\d+[a-z0-9_-]{0,10})-([a-z0-9_.-]{3,})/i;
       let found = false;
+
+      // Exclude "Drill-Down" from being treated as ERP data
+      const isTechnicalTerm = (str) => str.toLowerCase().includes('drill') || str.toLowerCase().includes('down');
 
       if (step.logs && step.logs.length > 0) {
         for (let i = step.logs.length - 1; i >= 0; i--) {
           const log = step.logs[i].content;
           const match = log.match(/Click on\s+([a-z0-9]{5,15})-([a-z0-9_.-]+)/i);
-          if (match) {
+          if (match && !isTechnicalTerm(match[1]) && !isTechnicalTerm(match[2])) {
             step.session = match[1];
             step.field = match[2];
             found = true;
@@ -159,7 +190,7 @@ async function handleMessage(message, sender, sendResponse) {
         }
       }
 
-      if (!found && message.elementText) {
+      if (!found && message.elementText && !isTechnicalTerm(message.elementText)) {
         const match = message.elementText.match(combinedRegex);
         if (match) {
           step.session = match[1];
@@ -175,10 +206,9 @@ async function handleMessage(message, sender, sendResponse) {
       }
 
       if (found || (step.session && step.field)) {
-        if (step.field && step.field.includes('-n')) {
-          step.field = step.field.split('-n')[0];
+        if (step.field && step.field.includes('-')) {
+          step.field = step.field.split('-')[0];
         }
-        step.title = "Entwicklerunterstützung";
       }
 
       if (!activeSession.steps) activeSession.steps = [];
@@ -205,7 +235,6 @@ async function handleMessage(message, sender, sendResponse) {
       if (cfg.copyOnClick) return;
     }
 
-    // Screenshot Preview / Autosave (Standard Recording)
     if (cfg.recording && !cfg.copyOnClick && sender?.tab?.id) {
       const responseData = {
         type: "screenshotReady",
@@ -234,3 +263,40 @@ async function handleMessage(message, sender, sendResponse) {
   }
 }
 
+/**
+ * Hilfsfunktion zum Zuschneiden von Screenshots im Service Worker
+ */
+async function cropImage(dataUrl, clickX, clickY, dpr) {
+  try {
+    const response = await fetch(dataUrl);
+    const blob = await response.blob();
+    const imgBitmap = await createImageBitmap(blob);
+
+    // Zielgröße (begrenzt durch Bildgröße)
+    const cropWidth = Math.min(1000, imgBitmap.width);
+    const cropHeight = Math.min(700, imgBitmap.height);
+
+    const canvas = new OffscreenCanvas(cropWidth, cropHeight);
+    const ctx = canvas.getContext('2d');
+
+    // Mittelpunkt berechnen
+    let sourceX = (clickX * dpr) - (cropWidth / 2);
+    let sourceY = (clickY * dpr) - (cropHeight / 2);
+
+    // Grenzen einhalten
+    sourceX = Math.max(0, Math.min(imgBitmap.width - cropWidth, sourceX));
+    sourceY = Math.max(0, Math.min(imgBitmap.height - cropHeight, sourceY));
+
+    ctx.drawImage(imgBitmap, sourceX, sourceY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+
+    const croppedBlob = await canvas.convertToBlob({ type: 'image/png' });
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result);
+      reader.readAsDataURL(croppedBlob);
+    });
+  } catch (e) {
+    console.error('[BG] Crop Error:', e);
+    return dataUrl;
+  }
+}

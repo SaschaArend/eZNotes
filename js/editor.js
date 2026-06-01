@@ -31,7 +31,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
         }
         setupEventListeners();
-        initTheme();
+        const lockData = await chrome.storage.local.get('featuresUnlocked');
+        updateLockStatus(!!lockData.featuresUnlocked);
+
+        // Check for updates asynchronously
+        checkForUpdates();
 
         // Listen for updates from background (new steps)
         chrome.storage.onChanged.addListener((changes, area) => {
@@ -58,12 +62,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                     }
                 }
             }
-            if (area === 'local' && changes.theme) {
-                if (changes.theme.newValue === 'dark') {
-                    document.body.classList.add('dark-theme');
-                } else {
-                    document.body.classList.remove('dark-theme');
-                }
+            if (area === 'local' && changes.featuresUnlocked !== undefined) {
+                updateLockStatus(!!changes.featuresUnlocked.newValue);
             }
         });
     } catch (e) {
@@ -78,7 +78,7 @@ function setupEventListeners() {
     // Export UI
     const exportModal = document.getElementById('exportModal');
     document.getElementById('btnExport').addEventListener('click', () => exportModal.style.display = 'flex');
-    exportModal.querySelector('button').addEventListener('click', () => exportModal.style.display = 'none'); // Close button
+    document.getElementById('btnCancelExport').addEventListener('click', () => exportModal.style.display = 'none'); // Close button
 
     // Chapters
     document.getElementById('btnAddChapter').addEventListener('click', addChapterStep);
@@ -86,7 +86,15 @@ function setupEventListeners() {
     // Export Options
     document.getElementById('exportPDF').addEventListener('click', () => exportSession('html'));
     document.getElementById('exportTour').addEventListener('click', () => exportSession('tour'));
-    document.getElementById('downloadTour').addEventListener('click', () => exportSession('standalone'));
+    document.getElementById('exportLive').addEventListener('click', startOverlayGuide);
+    document.getElementById('exportYouTrack').addEventListener('click', () => {
+        copyYouTrackMarkdown();
+        document.getElementById('exportModal').style.display = 'none';
+    });
+    document.getElementById('downloadTour').addEventListener('click', (e) => {
+        e.stopPropagation();
+        exportSession('standalone');
+    });
 
     // New Features
     document.getElementById('btnAddTextBlock').addEventListener('click', addTextBlockStep);
@@ -97,6 +105,8 @@ function setupEventListeners() {
     document.getElementById('stepDescInput').addEventListener('input', (e) => updateStepMeta('description', e.target.value));
     document.getElementById('stepSessionInput').addEventListener('input', (e) => updateStepMeta('session', e.target.value));
     document.getElementById('stepFieldInput').addEventListener('input', (e) => updateStepMeta('field', e.target.value));
+    document.getElementById('stepValueInput').addEventListener('input', (e) => updateStepMeta('value', e.target.value));
+    document.getElementById('stepDelayInput').addEventListener('input', (e) => updateStepMeta('rpaDelay', parseFloat(e.target.value) || 0));
 
     // Tools
     setupToolButton('btnSelect', 'view');
@@ -107,6 +117,10 @@ function setupEventListeners() {
     document.getElementById('btnResetMarker').addEventListener('click', resetCurrentMarkers);
     document.getElementById('btnUndo').addEventListener('click', undoAction);
     document.getElementById('btnRedo').addEventListener('click', redoAction);
+
+    // [Point 10] RPA Playback
+    document.getElementById('btnPlayStep').addEventListener('click', playStepOnSite);
+    document.getElementById('btnPlayAll').addEventListener('click', playAllSteps);
 
 
     // Canvas Interaction
@@ -124,9 +138,25 @@ function setupEventListeners() {
     document.getElementById('btnRestore').addEventListener('click', () => document.getElementById('restoreFile').click());
     document.getElementById('restoreFile').addEventListener('change', restoreSession);
 
+    // Auto-Save Backup Manager listeners
+    const backupModal = document.getElementById('backupModal');
+    if (backupModal) {
+        document.getElementById('btnAutoBackups').addEventListener('click', () => {
+            backupModal.style.display = 'flex';
+            renderBackupList();
+        });
+        document.getElementById('btnCancelBackupModal').addEventListener('click', () => {
+            backupModal.style.display = 'none';
+        });
+        document.getElementById('btnCloseBackupModal').addEventListener('click', () => {
+            backupModal.style.display = 'none';
+        });
+        document.getElementById('btnClearAllBackups').addEventListener('click', clearAllBackups);
+    }
+
     // Import Image
     document.getElementById('btnAddStep').addEventListener('click', () => {
-        if (confirm('Möchtest du eine Bilddatei importieren? \n(Alternativ kannst du Bilder auch einfach mit Strg+V einfügen)')) {
+        if (confirm('MÃ¶chtest du eine Bilddatei importieren? \n(Alternativ kannst du Bilder auch einfach mit Strg+V einfÃ¼gen)')) {
             document.getElementById('importImage').click();
         }
     });
@@ -150,7 +180,7 @@ function setupEventListeners() {
         saveToLibrary();
     });
 
-    document.getElementById('btnThemeToggle').addEventListener('click', toggleTheme);
+
 
     document.getElementById('documentTitleInput').addEventListener('input', (e) => {
         currentSession.title = e.target.value;
@@ -183,14 +213,14 @@ function handleKeyDown(e) {
         e.preventDefault();
     } else if (e.key === 'Delete' || e.key === 'Backspace') {
         if (selectedMarkerIndices.length > 0) {
-            pushUndoState('marker_change', 'Marker gelöscht');
+            pushUndoState('marker_change', 'Marker gelÃ¶scht');
             const step = currentSession.steps[currentStepIndex];
             // Sort indices descending to splice safely
             selectedMarkerIndices.sort((a, b) => b - a).forEach(idx => {
                 step.markers.splice(idx, 1);
             });
             selectedMarkerIndices = [];
-            pushHistory('Aktion: Marker gelöscht');
+            pushHistory('Aktion: Marker gelÃ¶scht');
             saveSession();
             renderCanvas();
         } else {
@@ -239,19 +269,99 @@ let dragStartX = 0;
 let dragStartY = 0;
 let dragInitialMarkers = []; // Store initial states for all selected markers
 
-function initTheme() {
-    chrome.storage.local.get(['theme'], (result) => {
-        if (result.theme === 'dark') {
-            document.body.classList.add('dark-theme');
-        } else {
-            document.body.classList.remove('dark-theme');
-        }
-    });
-}
+function updateLockStatus(unlocked) {
+    const btnLibrary = document.getElementById('btnLibrary');
+    const btnSaveLibrary = document.getElementById('btnSaveLibrary');
 
-function toggleTheme() {
-    const isDark = document.body.classList.toggle('dark-theme');
-    chrome.storage.local.set({ theme: isDark ? 'dark' : 'light' });
+    // RPA Automation Elements
+    const btnPlayStep = document.getElementById('btnPlayStep');
+    const btnPlayAll = document.getElementById('btnPlayAll');
+    const stepValueInput = document.getElementById('stepValueInput');
+    const stepDelayInput = document.getElementById('stepDelayInput');
+    const rpaLabel = document.querySelector('#selectorContainer label');
+
+    // Live Overlay Export Option Card
+    const exportLive = document.getElementById('exportLive');
+
+    if (unlocked) {
+        if (btnLibrary) {
+            btnLibrary.disabled = false;
+            btnLibrary.style.opacity = '1';
+            btnLibrary.title = 'Bibliothek öffnen';
+        }
+        if (btnSaveLibrary) {
+            btnSaveLibrary.disabled = false;
+            btnSaveLibrary.style.opacity = '1';
+            btnSaveLibrary.title = 'In Bibliothek speichern';
+        }
+        if (btnPlayStep) {
+            btnPlayStep.disabled = false;
+            btnPlayStep.style.opacity = '1';
+            btnPlayStep.title = 'Diesen Schritt testen';
+        }
+        if (btnPlayAll) {
+            btnPlayAll.disabled = false;
+            btnPlayAll.style.opacity = '1';
+            btnPlayAll.title = 'Alle Schritte nacheinander abspielen';
+        }
+        if (stepValueInput) {
+            stepValueInput.disabled = false;
+            stepValueInput.title = 'Text der automatisch getippt werden soll...';
+        }
+        if (stepDelayInput) {
+            stepDelayInput.disabled = false;
+            stepDelayInput.title = 'Pause (Sek)';
+        }
+        if (rpaLabel) {
+            rpaLabel.innerHTML = 'RPA Automatisierung 🔓';
+        }
+        if (exportLive) {
+            exportLive.style.opacity = '1';
+            exportLive.style.pointerEvents = 'auto';
+            exportLive.title = 'Live Overlay';
+            const smallElement = exportLive.querySelector('small');
+            if (smallElement) smallElement.textContent = 'Direkt auf Website';
+        }
+    } else {
+        if (btnLibrary) {
+            btnLibrary.disabled = true;
+            btnLibrary.style.opacity = '0.4';
+            btnLibrary.title = 'Bibliothek gesperrt (Freischalten über Hauptmenü)';
+        }
+        if (btnSaveLibrary) {
+            btnSaveLibrary.disabled = true;
+            btnSaveLibrary.style.opacity = '0.4';
+            btnSaveLibrary.title = 'In Bibliothek speichern gesperrt (Freischalten über Hauptmenü)';
+        }
+        if (btnPlayStep) {
+            btnPlayStep.disabled = true;
+            btnPlayStep.style.opacity = '0.4';
+            btnPlayStep.title = 'RPA Automatisierung gesperrt (Freischalten über Hauptmenü)';
+        }
+        if (btnPlayAll) {
+            btnPlayAll.disabled = true;
+            btnPlayAll.style.opacity = '0.4';
+            btnPlayAll.title = 'RPA Automatisierung gesperrt (Freischalten über Hauptmenü)';
+        }
+        if (stepValueInput) {
+            stepValueInput.disabled = true;
+            stepValueInput.title = 'Gesperrt - Freischalten über Hauptmenü';
+        }
+        if (stepDelayInput) {
+            stepDelayInput.disabled = true;
+            stepDelayInput.title = 'Gesperrt - Freischalten über Hauptmenü';
+        }
+        if (rpaLabel) {
+            rpaLabel.innerHTML = 'RPA Automatisierung 🔒 <span style="font-size:10px; font-weight:normal; color:var(--text-muted);">(Gesperrt - Freischalten über Hauptmenü)</span>';
+        }
+        if (exportLive) {
+            exportLive.style.opacity = '0.4';
+            exportLive.style.pointerEvents = 'none';
+            exportLive.title = 'Live Overlay gesperrt (Freischalten über Hauptmenü)';
+            const smallElement = exportLive.querySelector('small');
+            if (smallElement) smallElement.textContent = 'Gesperrt 🔒';
+        }
+    }
 }
 
 // Canvas Event Handlers
@@ -436,7 +546,7 @@ function handleMouseUp(e) {
             }
         }
     } else if (currentMode === 'arrow') {
-        pushUndoState('marker_change', 'Pfeil hinzugefügt');
+        pushUndoState('marker_change', 'Pfeil hinzugefÃ¼gt');
         step.markers.push({
             type: 'arrow',
             x1: startX / dpr,
@@ -444,14 +554,14 @@ function handleMouseUp(e) {
             x2: coords.x / dpr,
             y2: coords.y / dpr
         });
-        pushHistory('Werkzeug: Pfeil hinzugefügt');
+        pushHistory('Werkzeug: Pfeil hinzugefÃ¼gt');
         saveSession();
         renderCanvas();
     } else if (currentMode === 'rect') {
         const w = coords.x - startX;
         const h = coords.y - startY;
         if (Math.abs(w) > 5 && Math.abs(h) > 5) {
-            pushUndoState('marker_change', 'Viereck hinzugefügt');
+            pushUndoState('marker_change', 'Viereck hinzugefÃ¼gt');
             step.markers.push({
                 type: 'rect',
                 x: Math.min(startX, coords.x) / dpr,
@@ -484,7 +594,7 @@ function handleMouseUp(e) {
             blurH = Math.abs(h) / dpr;
         }
 
-        pushUndoState('marker_change', 'Verpixelung hinzugefügt');
+        pushUndoState('marker_change', 'Verpixelung hinzugefÃ¼gt');
         step.markers.push({
             type: 'blur',
             x: blurX,
@@ -552,7 +662,7 @@ function pushUndoState(type, actionName) {
 function saveStepImage(newDataUrl) {
     const step = currentSession.steps[currentStepIndex];
 
-    pushUndoState('edit', 'Bild geändert');
+    pushUndoState('edit', 'Bild geÃ¤ndert');
 
     step.dataUrl = newDataUrl;
     // Reload image object
@@ -619,6 +729,17 @@ function undoAction() {
             currentStepIndex = currentSession.steps.length - 1;
         }
         if (currentStepIndex !== -1) selectStep(currentStepIndex);
+    } else if (action.type === 'merge') {
+        redoActionObj = {
+            type: 'merge',
+            prevSteps: JSON.parse(JSON.stringify(currentSession.steps))
+        };
+        currentSession.steps = action.prevSteps;
+        renderSidebar();
+        if (currentStepIndex >= currentSession.steps.length) {
+            currentStepIndex = currentSession.steps.length - 1;
+        }
+        if (currentStepIndex !== -1) selectStep(currentStepIndex);
     }
 
     currentSession.redoStack.push(redoActionObj);
@@ -626,7 +747,7 @@ function undoAction() {
 
     saveSession();
     renderSidebar();
-    pushHistory('Aktion: Rückgängig (Undo)');
+    pushHistory('Aktion: RÃ¼ckgÃ¤ngig (Undo)');
 }
 
 function redoAction() {
@@ -674,6 +795,14 @@ function redoAction() {
         undoActionObj = {
             type: 'reorder',
             prevSteps: [...currentSession.steps]
+        };
+        currentSession.steps = action.prevSteps;
+        renderSidebar();
+        if (currentStepIndex !== -1) selectStep(currentStepIndex);
+    } else if (action.type === 'merge') {
+        undoActionObj = {
+            type: 'merge',
+            prevSteps: JSON.parse(JSON.stringify(currentSession.steps))
         };
         currentSession.steps = action.prevSteps;
         renderSidebar();
@@ -770,6 +899,16 @@ function selectStep(index) {
     document.getElementById('stepSessionInput').value = step.session || '';
     document.getElementById('stepFieldInput').value = step.field || '';
 
+    const selectorInput = document.getElementById('stepSelectorInput');
+    const valueInput = document.getElementById('stepValueInput');
+    const delayInput = document.getElementById('stepDelayInput');
+    if (selectorInput) selectorInput.value = step.selector || '';
+    if (valueInput) valueInput.value = step.value || '';
+    if (delayInput) delayInput.value = step.rpaDelay !== undefined ? step.rpaDelay : 3.5;
+
+    const selectorContainer = document.getElementById('selectorContainer');
+    if (selectorContainer) selectorContainer.style.display = (step.type === 'chapter' || step.type === 'textblock') ? 'none' : 'block';
+
     const isChapter = step.type === 'chapter';
     const isTextBlock = step.type === 'textblock';
     document.getElementById('titleLabel').textContent = isChapter ? 'Kapitel Name' : (isTextBlock ? 'Block Titel' : 'Titel des Schritts');
@@ -793,7 +932,7 @@ function selectStep(index) {
         tempImage = null;
         renderCanvas();
     } else {
-        // Falls Session/Feld fehlen aber im Titel stehen könnten, Parsing triggern
+        // Falls Session/Feld fehlen aber im Titel stehen kÃ¶nnten, Parsing triggern
         if ((!step.session || !step.field) && step.title) {
             updateStepMeta('title', step.title);
         }
@@ -888,10 +1027,8 @@ function renderSidebar() {
                 <div class="step-info">
                     <div class="step-title">${escapeHtml(step.title || 'Schritt ' + (index + 1))}</div>
                     <div class="step-desc">${escapeHtml(step.description || 'Keine Beschreibung')}</div>
-                    ${step.isSensitive ? '<span class="sensitive-badge">⚠️ Sensible Daten?</span>' : ''}
                 </div>
             `;
-            if (step.isSensitive) li.classList.add('sensitive');
         }
         list.appendChild(li);
     });
@@ -997,7 +1134,7 @@ function drawMarker(ctx, m, number, dpr, isSelected) {
     }
 
     if (m.type === 'rect') {
-        const offset = 3;
+        const offset = 5; // Adjusted to 5 to match preview/bake methods and account for stroke width
         const rx = (m.x - offset) * dpr;
         const ry = (m.y - offset) * dpr;
         const rw = (m.width + (offset * 2)) * dpr;
@@ -1068,7 +1205,7 @@ function updateStepMeta(key, value) {
     step[key] = value;
 
     // History only for meaningful text changes
-    if (key === 'title') pushHistory(`Titel geändert: ${value}`);
+    if (key === 'title') pushHistory(`Titel geÃ¤ndert: ${value}`);
     if (key === 'description' && value) pushHistory(`Beschreibung aktualisiert`);
     if (key === 'field' && value) pushHistory(`Tabellenfeld gesetzt: ${value}`);
 
@@ -1109,9 +1246,9 @@ function updateStepMeta(key, value) {
                 document.getElementById('stepFieldInput').value = currentStep.field;
             }
 
-            // Wenn beides vorhanden ist, Titel auf "Entwicklerunterstützung" setzen
+            // Wenn beides vorhanden ist, Titel auf "EntwicklerunterstÃ¼tzung" setzen
             if (currentStep.session && currentStep.field) {
-                const newTitle = "Entwicklerunterstützung";
+                const newTitle = "EntwicklerunterstÃ¼tzung";
                 if (currentStep.title !== newTitle) {
                     currentStep.title = newTitle;
                     document.getElementById('stepTitleInput').value = newTitle;
@@ -1149,11 +1286,13 @@ function resetCurrentMarkers() {
     const step = currentSession.steps[currentStepIndex];
 
     if (confirm('Möchtest du alle Marker (Punkt, Viereck, Pfeile, Verpixelungen) für diesen Schritt entfernen?')) {
+        pushUndoState('marker_change', 'Alle Marker gelöscht');
         delete step.x;
         delete step.y;
         delete step.rect;
         step.markers = [];
         selectedMarkerIndex = -1;
+        selectedMarkerIndices = [];
 
         pushHistory('Aktion: Alle Marker gelöscht');
         saveSession();
@@ -1163,7 +1302,7 @@ function resetCurrentMarkers() {
 
 function deleteCurrentStep() {
     if (currentStepIndex === -1) return;
-    if (!confirm('Diesen Schritt wirklich löschen?')) return;
+    if (!confirm('Diesen Schritt wirklich lÃ¶schen?')) return;
 
     const stepToDelete = currentSession.steps[currentStepIndex];
 
@@ -1181,7 +1320,7 @@ function deleteCurrentStep() {
     currentSession.redoStack = [];
 
     currentSession.steps.splice(currentStepIndex, 1);
-    pushHistory('Aktion: Schritt gelöscht');
+    pushHistory('Aktion: Schritt gelÃ¶scht');
     saveSession();
     renderSidebar();
     if (currentSession.steps.length > 0) selectStep(Math.max(0, currentStepIndex - 1));
@@ -1196,6 +1335,7 @@ async function saveSession(immediate = false) {
     if (immediate) {
         if (saveTimeout) clearTimeout(saveTimeout);
         await chrome.storage.local.set({ activeSession: currentSession });
+        await triggerAutoSaveBackup();
         return;
     }
 
@@ -1203,7 +1343,174 @@ async function saveSession(immediate = false) {
     saveTimeout = setTimeout(async () => {
         await chrome.storage.local.set({ activeSession: currentSession });
         saveTimeout = null;
+        await triggerAutoSaveBackup();
     }, 500); // 500ms debounce
+}
+
+let lastBackupTime = 0;
+const BACKUP_INTERVAL_MS = 60 * 1000; // 1 Minute
+
+async function triggerAutoSaveBackup() {
+    const now = Date.now();
+    if (now - lastBackupTime < BACKUP_INTERVAL_MS) {
+        return; // Überspringen falls erst kürzlich gesichert
+    }
+
+    try {
+        const data = await chrome.storage.local.get('auto_backups');
+        let backups = data.auto_backups || [];
+        
+        // Leere/ungültige Sessions ignorieren
+        if (!currentSession || !currentSession.steps || currentSession.steps.length === 0) {
+            return;
+        }
+
+        const currentDataStr = JSON.stringify(currentSession);
+        
+        // Doppelte Backups vermeiden
+        if (backups.length > 0) {
+            const lastBackup = backups[0];
+            if (JSON.stringify(lastBackup.sessionData) === currentDataStr) {
+                return;
+            }
+        }
+
+        const newBackup = {
+            id: 'backup_' + now + '_' + Math.random().toString(36).substr(2, 5),
+            timestamp: now,
+            title: currentSession.title || 'Dokumentation',
+            stepsCount: currentSession.steps.length,
+            sessionData: JSON.parse(currentDataStr)
+        };
+
+        backups.unshift(newBackup);
+
+        // Maximal 15 Backups aufbewahren
+        if (backups.length > 15) {
+            backups = backups.slice(0, 15);
+        }
+
+        await chrome.storage.local.set({ auto_backups: backups });
+        lastBackupTime = now;
+        console.log(`[Auto-Save] Backup erfolgreich erstellt: ${new Date(now).toLocaleTimeString()}`);
+    } catch (e) {
+        console.error('[Auto-Save] Fehler beim Sichern:', e);
+    }
+}
+
+async function renderBackupList() {
+    const backupList = document.getElementById('backupList');
+    if (!backupList) return;
+
+    backupList.innerHTML = '';
+
+    try {
+        const data = await chrome.storage.local.get('auto_backups');
+        const backups = data.auto_backups || [];
+
+        if (backups.length === 0) {
+            backupList.innerHTML = '<div style="padding: 30px; text-align: center; color: var(--text-muted); font-size: 12px; font-weight: 500;">Keine automatischen Backups vorhanden.</div>';
+            return;
+        }
+
+        backups.forEach(backup => {
+            const item = document.createElement('div');
+            item.className = 'backup-item';
+
+            const date = new Date(backup.timestamp);
+            const timeStr = date.toLocaleString('de-DE', {
+                day: '2-digit', month: '2-digit', year: 'numeric',
+                hour: '2-digit', minute: '2-digit', second: '2-digit'
+            });
+
+            item.innerHTML = `
+                <div class="backup-info">
+                    <div class="backup-title" title="${escapeHtml(backup.title)}">${escapeHtml(backup.title)}</div>
+                    <div class="backup-meta">
+                        <span>📅 ${timeStr}</span>
+                        <span>📸 ${backup.stepsCount} Schritte</span>
+                    </div>
+                </div>
+                <div class="backup-actions">
+                    <button class="primary backup-btn-restore" data-id="${backup.id}">🔄 Wiederherstellen</button>
+                    <button style="color: #ef4444; border-color: #fca5a5; background: transparent; cursor: pointer;" class="backup-btn-delete" data-id="${backup.id}">🗑️</button>
+                </div>
+            `;
+
+            // Klick-Events binden
+            item.querySelector('.backup-btn-restore').onclick = () => restoreBackup(backup.id);
+            item.querySelector('.backup-btn-delete').onclick = () => deleteBackup(backup.id);
+
+            backupList.appendChild(item);
+        });
+    } catch (e) {
+        console.error('Error rendering backup list:', e);
+        backupList.innerHTML = '<div style="padding: 20px; text-align: center; color: #ef4444; font-size: 12px;">Fehler beim Laden der Backups.</div>';
+    }
+}
+
+async function restoreBackup(backupId) {
+    try {
+        const data = await chrome.storage.local.get('auto_backups');
+        const backups = data.auto_backups || [];
+        const backup = backups.find(b => b.id === backupId);
+
+        if (!backup) {
+            alert('Backup nicht gefunden.');
+            return;
+        }
+
+        if (confirm(`Möchtest du das Backup vom ${new Date(backup.timestamp).toLocaleString('de-DE')} wirklich wiederherstellen?\n\nDeine aktuelle Session wird überschrieben.`)) {
+            currentSession = JSON.parse(JSON.stringify(backup.sessionData));
+            
+            document.getElementById('documentTitleInput').value = currentSession.title || 'Dokumentation';
+            document.getElementById('sessionVersionInput').value = currentSession.version || '1.0';
+            document.getElementById('sessionTagsInput').value = (currentSession.tags || []).join(', ');
+            
+            const exportTitle = document.getElementById('exportTitleInput');
+            if (exportTitle) exportTitle.value = currentSession.title;
+
+            await saveSession(true);
+
+            renderSidebar();
+            if (currentSession.steps.length > 0) {
+                selectStep(0);
+            } else {
+                currentStepIndex = -1;
+                document.getElementById('canvasWrapper').innerHTML = '<div class="empty-state"><p>Keine Schritte vorhanden</p></div>';
+            }
+
+            document.getElementById('backupModal').style.display = 'none';
+            alert('Backup erfolgreich wiederhergestellt!');
+        }
+    } catch (e) {
+        console.error('Restore backup error:', e);
+        alert('Fehler beim Wiederherstellen des Backups.');
+    }
+}
+
+async function deleteBackup(backupId) {
+    try {
+        const data = await chrome.storage.local.get('auto_backups');
+        let backups = data.auto_backups || [];
+        backups = backups.filter(b => b.id !== backupId);
+
+        await chrome.storage.local.set({ auto_backups: backups });
+        renderBackupList();
+    } catch (e) {
+        console.error('Delete backup error:', e);
+    }
+}
+
+async function clearAllBackups() {
+    if (confirm('Möchtest du wirklich alle automatischen Backups unwiderruflich löschen?')) {
+        try {
+            await chrome.storage.local.set({ auto_backups: [] });
+            renderBackupList();
+        } catch (e) {
+            console.error('Clear all backups error:', e);
+        }
+    }
 }
 
 function roundRect(ctx, x, y, width, height, radius, fill, stroke) {
@@ -1252,17 +1559,18 @@ async function exportSession(format) {
     const docTitle = titleInput && titleInput.value.trim() ? titleInput.value.trim() : 'Dokumentation';
     document.getElementById('exportModal').style.display = 'none';
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    const safeTitle = docTitle.replace(/[^a-zA-Z0-9_\- äöüÄÖÜß]/g, '_');
+    const safeTitle = docTitle.replace(/[^a-zA-Z0-9_\- Ã¤Ã¶Ã¼Ã„Ã–ÃœÃŸ]/g, '_');
     const folderName = `eZNotes-${safeTitle}-${timestamp}`;
 
-    // Bake markers into images for export
+    // Bake markers into images for export (only for static HTML/PDF format)
     const exportSteps = [];
     for (let step of currentSession.steps) {
         const hasNoMarkers = !step.x && !step.y && !step.rect && (!step.markers || step.markers.length === 0);
         if (step.type === 'chapter' || step.type === 'textblock' || hasNoMarkers) {
             exportSteps.push({ ...step });
         } else {
-            const bakedUrl = await bakeMarkersIntoImage(step);
+            // Only bake for static HTML export, not for tour as tour renders overlays live
+            const bakedUrl = (format === 'html') ? await bakeMarkersIntoImage(step) : step.dataUrl;
             exportSteps.push({ ...step, dataUrl: bakedUrl });
         }
     }
@@ -1286,16 +1594,10 @@ async function exportSession(format) {
 async function downloadStandaloneTour(docTitle, safeTitle) {
     const logo = await getBase64Logo();
 
-    // Bake markers for standalone as well
+    // No baking for standalone as tour.js renders overlays
     const exportSteps = [];
     for (let step of currentSession.steps) {
-        const hasNoMarkers = !step.x && !step.y && !step.rect && (!step.markers || step.markers.length === 0);
-        if (step.type === 'chapter' || step.type === 'textblock' || hasNoMarkers) {
-            exportSteps.push({ ...step });
-        } else {
-            const bakedUrl = await bakeMarkersIntoImage(step);
-            exportSteps.push({ ...step, dataUrl: bakedUrl });
-        }
+        exportSteps.push({ ...step });
     }
 
     const exportData = {
@@ -1374,14 +1676,14 @@ function restoreSession(e) {
         try {
             const session = JSON.parse(event.target.result);
             if (session.steps && Array.isArray(session.steps)) {
-                if (confirm('Aktuelle Session überschreiben?')) {
+                if (confirm('Aktuelle Session Ã¼berschreiben?')) {
                     currentSession = session;
                     await saveSession();
                     renderSidebar();
                     if (currentSession.steps.length > 0) selectStep(0);
                 }
             } else {
-                alert('Ungültiges Backup-Format.');
+                alert('UngÃ¼ltiges Backup-Format.');
             }
         } catch (err) {
             console.error('Restore Error:', err);
@@ -1405,11 +1707,82 @@ async function quickCopyImage() {
 
         const btn = document.getElementById('btnQuickCopy');
         const oldText = btn.textContent;
-        btn.textContent = '✅ Bild kopiert!';
+        btn.textContent = 'âœ… Bild kopiert!';
         setTimeout(() => btn.textContent = oldText, 2000);
     } catch (err) {
         console.error('QuickCopy Error:', err);
         alert('Fehler beim Kopieren des Bildes.');
+    }
+}
+
+async function copyYouTrackMarkdown() {
+    const titleInput = document.getElementById('exportTitleInput');
+    const docTitle = titleInput && titleInput.value.trim() ? titleInput.value.trim() : 'Dokumentation';
+
+    let md = `# ${docTitle}\n\n`;
+    md += `*Erstellt am: ${new Date().toLocaleString()}*\n\n---\n\n`;
+
+    let imageCounter = 1;
+    for (let step of currentSession.steps) {
+        if (step.type === 'chapter') {
+            md += `## 🔖 ${step.title}\n\n`;
+            if (step.description) md += `${step.description}\n\n`;
+        } else if (step.type === 'textblock') {
+            md += `### 📝 ${step.title}\n\n`;
+            let content = step.content || '';
+            // Basic HTML to Markdown conversion for the textblock
+            let contentText = content.replace(/<br\s*\/?>/gi, '\n');
+            contentText = contentText.replace(/<\/p>/gi, '\n\n');
+            contentText = contentText.replace(/<[^>]*>/g, '');
+            md += `${contentText.trim()}\n\n`;
+        } else {
+            md += `### Schritt ${imageCounter}: ${step.title || 'Ohne Titel'}\n\n`;
+            if (step.description) md += `${step.description}\n\n`;
+
+            // ERP Data
+            if (step.session || step.field) {
+                md += `> **System-Info:**\n`;
+                if (step.session) md += `> - Session: \`${step.session}\`\n`;
+                if (step.field) md += `> - Feld: \`${step.field}\`\n`;
+                md += `\n`;
+            }
+
+            // Image Reference (Markdown format)
+            md += `![Schritt ${imageCounter}](step${imageCounter}.png)\n\n`;
+
+            // Bake markers into the image and trigger programmatic download
+            const bakedUrl = await bakeMarkersIntoImage(step);
+            if (bakedUrl) {
+                const link = document.createElement('a');
+                link.href = bakedUrl;
+                link.download = `step${imageCounter}.png`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            }
+
+            imageCounter++;
+        }
+    }
+
+    md += `---\n*Exportiert mit eZNotes*`;
+
+    try {
+        await navigator.clipboard.writeText(md);
+        alert('YouTrack Markdown wurde erfolgreich in die Zwischenablage kopiert!\n\nDie dazugehörigen Bilder wurden automatisch heruntergeladen.\n\nSo fügst du es in YouTrack ein:\n1. Drücke Strg+V im YouTrack-Editor, um den Text einzufügen.\n2. Ziehe die heruntergeladenen Bilder per Drag & Drop direkt in YouTrack.');
+    } catch (err) {
+        console.error('Clipboard Error:', err);
+        const textArea = document.createElement("textarea");
+        textArea.value = md;
+        document.body.appendChild(textArea);
+        textArea.select();
+        try {
+            document.execCommand('copy');
+            alert('YouTrack Markdown wurde in die Zwischenablage kopiert (Fallback-Methode)!\n\nDie Bilder wurden automatisch heruntergeladen.\n\nSo fügst du es in YouTrack ein:\n1. Drücke Strg+V im YouTrack-Editor, um den Text einzufügen.\n2. Ziehe die heruntergeladenen Bilder per Drag & Drop direkt in YouTrack.');
+        } catch (e) {
+            alert('Fehler beim Kopieren. Die Bilder wurden heruntergeladen, aber der Text konnte nicht kopiert werden. Bitte kopiere den Text manuell.');
+        }
+        document.body.removeChild(textArea);
     }
 }
 
@@ -1429,7 +1802,7 @@ function addChapterStep() {
     if (!currentSession.steps) currentSession.steps = [];
     currentSession.steps.push(newChapter);
 
-    pushHistory('Aktion: Kapitel hinzugefügt');
+    pushHistory('Aktion: Kapitel hinzugefÃ¼gt');
     saveSession().then(() => {
         renderSidebar();
         selectStep(currentSession.steps.length - 1);
@@ -1450,7 +1823,7 @@ function addTextBlockStep() {
     if (!currentSession.steps) currentSession.steps = [];
     currentSession.steps.push(newBlock);
 
-    pushHistory('Aktion: Textblock hinzugefügt');
+    pushHistory('Aktion: Textblock hinzugefÃ¼gt');
     saveSession().then(() => {
         renderSidebar();
         selectStep(currentSession.steps.length - 1);
@@ -1459,7 +1832,7 @@ function addTextBlockStep() {
 
 function mergeSelectedSteps() {
     if (selectedStepsForMerge.size < 2) {
-        alert('Bitte wähle mindestens zwei Schritte mit Strg+Klick aus, um sie zusammenzuführen.');
+        alert('Bitte wÃ¤hle mindestens zwei Schritte mit Strg+Klick aus, um sie zusammenzufÃ¼hren.');
         return;
     }
 
@@ -1472,7 +1845,18 @@ function mergeSelectedSteps() {
         return;
     }
 
-    if (!confirm(`${indices.length} Schritte zusammenführen? Der erste Schritt wird als Basis verwendet.`)) return;
+    if (!confirm(`${indices.length} Schritte zusammenfÃ¼hren? Der erste Schritt wird als Basis verwendet.`)) return;
+
+    // Save state to undo stack before merging
+    if (!currentSession.undoStack) currentSession.undoStack = [];
+    currentSession.undoStack.push({
+        type: 'merge',
+        prevSteps: JSON.parse(JSON.stringify(currentSession.steps))
+    });
+    if (currentSession.undoStack.length > 30) currentSession.undoStack.shift();
+
+    // Clear redo stack on new action
+    currentSession.redoStack = [];
 
     // Initialize markers array if not exists
     if (!baseStep.markers) baseStep.markers = [];
@@ -1500,13 +1884,13 @@ function mergeSelectedSteps() {
         currentSession.steps.splice(idx, 1);
     });
 
-    pushHistory(`Aktion: ${indices.length} Schritte zusammengeführt`);
+    pushHistory(`Aktion: ${indices.length} Schritte zusammengefÃ¼hrt`);
 
     selectedStepsForMerge.clear();
     saveSession().then(() => {
         renderSidebar();
         selectStep(currentSession.steps.indexOf(baseStep));
-        alert('Schritte erfolgreich zusammengeführt!');
+        alert('Schritte erfolgreich zusammengefÃ¼hrt!');
     });
 }
 
@@ -1515,7 +1899,7 @@ function handleImageImport(e) {
     if (!file) return;
 
     if (!file.type.startsWith('image/')) {
-        alert('Bitte wähle eine Bilddatei aus.');
+        alert('Bitte wÃ¤hle eine Bilddatei aus.');
         return;
     }
 
@@ -1536,7 +1920,7 @@ function handlePaste(e) {
             const blob = item.getAsFile();
             const reader = new FileReader();
             reader.onload = (event) => {
-                addNewStep(event.target.result, 'Eingefügtes Bild');
+                addNewStep(event.target.result, 'EingefÃ¼gtes Bild');
             };
             reader.readAsDataURL(blob);
         }
@@ -1561,7 +1945,7 @@ function addNewStep(dataUrl, fileName) {
     saveSession().then(() => {
         renderSidebar();
         selectStep(currentSession.steps.length - 1);
-        alert('Neuer Schritt hinzugefügt!');
+        alert('Neuer Schritt hinzugefÃ¼gt!');
     });
 }
 
@@ -1589,7 +1973,7 @@ async function bakeMarkersIntoImage(step) {
                     // Let's re-implement simply here to avoid dependency on global state/isSelected
                     ctx.save();
                     if (m.type === 'rect') {
-                        const offset = 3;
+                        const offset = 5; // Adjusted from 3 to 5 to account for editor's 4px centered stroke width
                         const rx = (m.x - offset) * dpr;
                         const ry = (m.y - offset) * dpr;
                         const rw = (m.width + (offset * 2)) * dpr;
@@ -1625,7 +2009,7 @@ async function bakeMarkersIntoImage(step) {
                 });
             } else if (step.rect) {
                 // Legacy rect support
-                const offset = 3;
+                const offset = 5; // Adjusted from 3 to 5 to account for editor's 4px centered stroke width
                 const rx = (step.rect.x - offset) * dpr;
                 const ry = (step.rect.y - offset) * dpr;
                 const rw = (step.rect.width + (offset * 2)) * dpr;
@@ -1774,3 +2158,177 @@ function pushHistory(action) {
     // Keep only last 100 actions to avoid data bloat
     if (currentSession.history.length > 100) currentSession.history.shift();
 }
+
+async function playAllSteps() {
+    const lockData = await chrome.storage.local.get('featuresUnlocked');
+    if (!lockData.featuresUnlocked) {
+        alert('Diese Funktion ist gesperrt. Bitte schalte die Bibliotheksfunktionen im Hauptmenü frei.');
+        return;
+    }
+
+    if (!currentSession.steps || currentSession.steps.length === 0) return;
+
+    const automationSteps = currentSession.steps.filter(s => s.selector);
+
+    if (automationSteps.length === 0) {
+        alert('Keine automatisierbaren Schritte gefunden.');
+        return;
+    }
+
+    // Automatisierung starten (Silent)
+    const indicator = document.createElement('div');
+    indicator.innerText = '● Automatisierung läuft...';
+    indicator.style = 'position:fixed; top:10px; right:10px; background:red; color:white; padding:5px 10px; z-index:9999; border-radius:4px;';
+    document.body.appendChild(indicator);
+
+    for (let i = 0; i < automationSteps.length; i++) {
+        const step = automationSteps[i];
+
+        // Tab suchen für jeden Schritt (falls Domain wechselt)
+        const hostname = step.meta?.hostname || '';
+        const domainMatch = hostname.split('.').slice(-2).join('.');
+        const tabs = await chrome.tabs.query({});
+        let targetTab = tabs.find(t => {
+            try {
+                if (!t.url) return false;
+                const tabUrl = new URL(t.url);
+                return tabUrl.hostname === hostname || tabUrl.hostname.includes(hostname) || (domainMatch && tabUrl.hostname.includes(domainMatch));
+            } catch (e) { return false; }
+        });
+
+        if (targetTab) {
+            chrome.tabs.sendMessage(targetTab.id, {
+                type: 'PLAY_STEP',
+                selector: step.selector,
+                elementText: step.title,
+                value: step.value
+            });
+            chrome.tabs.update(targetTab.id, { active: true });
+        }
+
+        if (i < automationSteps.length - 1) {
+            const delayMs = typeof step.rpaDelay === 'number' ? step.rpaDelay * 1000 : 3500;
+            await new Promise(resolve => setTimeout(resolve, delayMs));
+        }
+    }
+    indicator.remove();
+}
+
+async function playStepOnSite() {
+    const lockData = await chrome.storage.local.get('featuresUnlocked');
+    if (!lockData.featuresUnlocked) {
+        alert('Diese Funktion ist gesperrt. Bitte schalte die Bibliotheksfunktionen im Hauptmenü frei.');
+        return;
+    }
+
+    if (currentStepIndex === -1) return;
+    const step = currentSession.steps[currentStepIndex];
+    if (!step.selector) return;
+
+    const tabs = await chrome.tabs.query({});
+    const hostname = step.meta?.hostname || '';
+    const domainMatch = hostname.split('.').slice(-2).join('.');
+
+    let targetTab = tabs.find(t => {
+        try {
+            if (!t.url) return false;
+            const tabUrl = new URL(t.url);
+            return tabUrl.hostname === hostname || tabUrl.hostname.includes(hostname) || (domainMatch && tabUrl.hostname.includes(domainMatch));
+        } catch (e) { return false; }
+    });
+
+    if (targetTab) {
+        chrome.tabs.sendMessage(targetTab.id, {
+            type: 'PLAY_STEP',
+            selector: step.selector,
+            elementText: step.title,
+            value: step.value
+        });
+        chrome.tabs.update(targetTab.id, { active: true });
+    }
+}
+
+// --- [Point 7] Interaktive Overlay Guide starten ---
+async function startOverlayGuide() {
+    const lockData = await chrome.storage.local.get('featuresUnlocked');
+    if (!lockData.featuresUnlocked) {
+        alert('Diese Funktion ist gesperrt. Bitte schalte die Bibliotheksfunktionen im Hauptmenü frei.');
+        return;
+    }
+
+    document.getElementById('exportModal').style.display = 'none';
+
+    // Wir nehmen den Hostname des ersten Bild-Schritts
+    const firstStep = currentSession.steps.find(s => s.dataUrl && s.meta?.hostname);
+    if (!firstStep) {
+        alert('Keine gültigen Schritte für einen Guide gefunden.');
+        return;
+    }
+
+    const hostname = firstStep.meta.hostname || '';
+    const domainMatch = hostname.split('.').slice(-2).join('.');
+
+    const tabs = await chrome.tabs.query({});
+    let targetTab = tabs.find(t => {
+        try {
+            if (!t.url) return false;
+            const tabUrl = new URL(t.url);
+            return tabUrl.hostname === hostname || tabUrl.hostname.includes(hostname) || (domainMatch && tabUrl.hostname.includes(domainMatch));
+        } catch (e) { return false; }
+    });
+
+    // Fallback: Aktueller Tab wenn Bestätigt (für schwierige Iframe/Portal-Apps)
+    if (!targetTab) {
+        const lastTabs = await chrome.tabs.query({ active: true, currentWindow: false });
+        const lastTab = lastTabs[0];
+        const confirmMsg = `Die Zielseite "${hostname}" wurde nicht direkt gefunden.\n\nSoll der Guide auf dem aktuell aktiven Tab gestartet werden?`;
+        if (lastTab && confirm(confirmMsg)) {
+            targetTab = lastTab;
+        }
+    }
+
+    if (!targetTab) {
+        alert(`Bitte öffnen Sie zuerst die Zielseite (${hostname}), um den Guide zu starten.`);
+        return;
+    }
+
+    // RPA Live View direkt auf dem Ziel-Tab starten (Kapitel und Textblöcke überspringen)
+    const guideSteps = currentSession.steps.filter(s => s.type !== 'chapter' && s.type !== 'textblock');
+
+    if (guideSteps.length === 0) {
+        alert('Keine ausführbaren Schritte für den RPA Live View gefunden.');
+        return;
+    }
+
+    chrome.tabs.sendMessage(targetTab.id, {
+        type: 'START_LIVE_VIEW',
+        steps: guideSteps
+    });
+
+    chrome.tabs.update(targetTab.id, { active: true });
+}
+
+async function checkForUpdates() {
+    try {
+        const response = await fetch('https://raw.githubusercontent.com/SaschaArend/eZNotes/main/manifest.json');
+        if (!response.ok) return;
+        const remoteManifest = await response.json();
+        const remoteVersion = remoteManifest.version;
+        const localVersion = chrome.runtime.getManifest().version;
+
+        if (remoteVersion && remoteVersion !== localVersion) {
+            const banner = document.getElementById('editorUpdateBanner');
+            const versionSpan = document.getElementById('editorRemoteVersion');
+            if (banner && versionSpan) {
+                versionSpan.textContent = remoteVersion;
+                banner.style.display = 'block';
+                banner.onclick = () => {
+                    alert(`Ein neues Update für eZNotes ist verfügbar!\n\nLokal installiert: v${localVersion}\nVerfügbar auf GitHub: v${remoteVersion}\n\nBitte schließe Google Chrome komplett und führe die Datei "update.bat" im Projektordner aus, um das Update automatisch durchzuführen.`);
+                };
+            }
+        }
+    } catch (e) {
+        console.warn('[UpdateCheck] Fehler:', e);
+    }
+}
+

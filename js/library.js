@@ -34,17 +34,39 @@ async function getHandle(name) {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
-    initTheme();
+    // Check lock status first
+    const lockData = await chrome.storage.local.get('featuresUnlocked');
+    if (!lockData.featuresUnlocked) {
+        document.body.innerHTML = `
+            <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; font-family: 'Inter', sans-serif; background: #f8fafc; color: #0f172a; padding: 20px;">
+                <div style="background: white; border: 1px solid #e2e8f0; border-radius: 16px; padding: 40px; text-align: center; box-shadow: 0 10px 25px rgba(0,0,0,0.05); max-width: 400px; width: 100%;">
+                    <div style="font-size: 64px; margin-bottom: 20px; user-select: none;">🔒</div>
+                    <h2 style="font-size: 24px; font-weight: 700; background: linear-gradient(135deg, #4f46e5 0%, #6366f1 100%); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 12px; letter-spacing: -0.02em;">Bibliothek gesperrt</h2>
+                    <p style="color: #64748b; font-size: 14px; line-height: 1.6; margin-bottom: 24px;">Bitte schalte die Bibliotheksfunktionen im Hauptmenü (Sascha Arend Link unten rechts) frei.</p>
+                    <button id="btnExitLock" style="width: 100%; padding: 12px; background: linear-gradient(135deg, #4f46e5 0%, #6366f1 100%); color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; transition: transform 0.2s; box-shadow: 0 4px 8px rgba(79, 70, 229, 0.2);">Schließen</button>
+                </div>
+            </div>
+        `;
+        document.getElementById('btnExitLock')?.addEventListener('click', () => {
+            window.close();
+        });
+        
+        // Also listen for unlock in real-time, so if they unlock in the popup while library is open, it automatically reloads!
+        chrome.storage.onChanged.addListener((changes, area) => {
+            if (area === 'local' && changes.featuresUnlocked?.newValue === true) {
+                window.location.reload();
+            }
+        });
+        return;
+    }
+
+    // Normal initialization if unlocked
     await loadSessions();
     setupEventListeners();
 
     chrome.storage.onChanged.addListener((changes, area) => {
-        if (area === 'local' && changes.theme) {
-            if (changes.theme.newValue === 'dark') {
-                document.body.classList.add('dark-theme');
-            } else {
-                document.body.classList.remove('dark-theme');
-            }
+        if (area === 'local' && changes.featuresUnlocked?.newValue === false) {
+            window.location.reload(); // Reload if locked from popup
         }
     });
 });
@@ -211,8 +233,6 @@ function setupEventListeners() {
     };
 
     document.getElementById('btnBulkMerge').onclick = mergeSelectedSessions;
-
-    document.getElementById('btnThemeToggle')?.addEventListener('click', toggleTheme);
 }
 
 function applySorting() {
@@ -606,17 +626,4 @@ function escapeHtml(unsafe) {
     return (unsafe || '').replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
 }
 
-function initTheme() {
-    chrome.storage.local.get(['theme'], (result) => {
-        if (result.theme === 'dark') {
-            document.body.classList.add('dark-theme');
-        } else {
-            document.body.classList.remove('dark-theme');
-        }
-    });
-}
 
-function toggleTheme() {
-    const isDark = document.body.classList.toggle('dark-theme');
-    chrome.storage.local.set({ theme: isDark ? 'dark' : 'light' });
-}

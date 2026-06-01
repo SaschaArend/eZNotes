@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "eZNotes",
-  "version": "2.2",
+  "version": "2.5",
   "description": "Erstelle im Handumdrehen professionelle Schritt-für-Schritt-Anleitungen. Erfasse automatisch Screenshots bei jedem Klick und exportiere sie als strukturierte Dokumentation.",
   "copyright": "Copyright © 2026 Sascha Arend",
   "permissions": [
@@ -46,6 +46,27 @@
       ],
       "all_frames": true,
       "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "js/console_interceptor.js"
+      ],
+      "all_frames": true,
+      "run_at": "document_start",
+      "world": "MAIN"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "js/console_interceptor.js"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ]
 }
